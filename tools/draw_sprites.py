@@ -303,12 +303,111 @@ def heron_frame(phase):
     return outline(img, HERON["line"])
 
 
+def heron_pose(body_dy, legs, neck, neck_dy, wing):
+    """The heron on or near the ground, feet on the bottom row when standing.
+
+    body_dy lowers the body (crouching) or raises it; legs is "stand",
+    "crouch", "reach" (swung forward to land), "dangle" or "trail"; neck is
+    "up" (extended S) or "tucked" (flight S), with neck_dy dropping the head;
+    wing is None for folded, else a lift from 1 (raised) to -1 (lowered).
+    """
+    w, h = HERON["size"]
+    img = Image.new("RGBA", (w, h), CLEAR)
+    d = ImageDraw.Draw(img)
+    b = body_dy
+    hip = 20 + b
+    leg = HERON["leg"]
+
+    if legs == "stand":
+        d.line([(13, hip), (12, 26), (12, 30)], fill=leg)
+        d.line([(14, hip), (15, 26), (16, 30)], fill=leg)
+        d.line([(11, 31), (14, 31)], fill=leg)
+        d.line([(15, 31), (18, 31)], fill=leg)
+    elif legs == "crouch":
+        d.line([(13, hip), (10, 27), (12, 30)], fill=leg)
+        d.line([(14, hip), (12, 27), (15, 30)], fill=leg)
+        d.line([(11, 31), (14, 31)], fill=leg)
+        d.line([(14, 31), (17, 31)], fill=leg)
+    elif legs == "reach":
+        d.line([(13, hip), (15, hip + 5), (17, hip + 8)], fill=leg)
+        d.line([(14, hip), (17, hip + 5), (19, hip + 8)], fill=leg)
+        d.line([(19, hip + 9), (21, hip + 9)], fill=leg)
+    elif legs == "dangle":
+        d.line([(13, hip), (12, hip + 4), (10, hip + 7)], fill=leg)
+        d.line([(14, hip), (14, hip + 4), (12, hip + 7)], fill=leg)
+        d.point((9, hip + 8), fill=leg)
+    else:  # trail, as in flight
+        d.line([(11, hip - 2), (0, hip)], fill=leg)
+        d.point((0, hip + 1), fill=leg)
+
+    d.ellipse([9, 15 + b, 19, 20 + b], fill=HERON["body"])
+    d.line([(11, 20 + b), (18, 19 + b)], fill=HERON["belly"])
+
+    if neck == "up":
+        n = b + neck_dy
+        d.line([(17, 16 + b), (19, 13 + n), (18, 11 + n), (19, 9 + n)], fill=HERON["neck"], width=2)
+        d.rectangle([19, 7 + n, 22, 9 + n], fill=HERON["neck"])
+        d.line([(19, 7 + n), (22, 7 + n)], fill=HERON["crest"])  # crown stripe
+        d.line([(16, 8 + n), (18, 7 + n)], fill=HERON["crest"])  # plume
+        d.point((21, 8 + n), fill=HERON["eye"])
+        d.line([(23, 8 + n), (29, 9 + n)], fill=HERON["bill"])
+        d.point((23, 9 + n), fill=HERON["bill"])
+    else:
+        d.line([(18, 15 + b), (19, 18 + b)], fill=HERON["neck"])
+        d.line([(19, 19 + b), (21, 19 + b)], fill=HERON["neck"])
+        d.line([(20, 18 + b), (21, 15 + b)], fill=HERON["neck"])
+        d.line([(21, 14 + b), (22, 13 + b)], fill=HERON["neck"])
+        d.rectangle([22, 12 + b, 24, 14 + b], fill=HERON["neck"])
+        d.line([(21, 12 + b), (24, 12 + b)], fill=HERON["crest"])
+        d.line([(18, 13 + b), (20, 12 + b)], fill=HERON["crest"])
+        d.point((23, 13 + b), fill=HERON["eye"])
+        d.line([(25, 13 + b), (31, 14 + b)], fill=HERON["bill"])
+        d.point((25, 14 + b), fill=HERON["bill"])
+
+    if wing is None:
+        # Folded: grey back with the dark flight feathers drooping behind.
+        d.ellipse([10, 15 + b, 18, 19 + b], fill=HERON["wing"])
+        d.polygon([(11, 18 + b), (6, 21 + b), (10, 20 + b)], fill=HERON["primary"])
+    else:
+        sy = 15 + b
+        front, back = (18, sy), (10, sy + 1)
+        wrist = (15, sy - 7 * wing)
+        tip = (5 - abs(wing), sy - 13 * wing)
+        trail = (8, sy - 5 * wing + 1)
+        d.polygon([front, wrist, tip, trail, back], fill=HERON["wing"])
+        d.polygon([wrist, tip, trail], fill=HERON["primary"])
+
+    return outline(img, HERON["line"])
+
+
 def heron_sheet():
     (w, h), n = HERON["size"], HERON["frames"]
-    rows = [[heron_frame(2 * math.pi * i / n) for i in range(n)]]
+    pose = heron_pose
+    # name: (frames, fps). fly comes first: it is the default animation.
+    anims = {
+        "fly": ([heron_frame(2 * math.pi * i / n) for i in range(n)], 7),
+        "land": ([pose(-2, "dangle", "tucked", 0, 1.0),    # wings flare up
+                  pose(-1, "reach", "tucked", 0, 0.9),     # legs swing forward
+                  pose(1, "stand", "up", 2, -0.6),         # touch down, braking stroke
+                  pose(3, "crouch", "up", 2, 0.4),         # absorb
+                  pose(1, "stand", "up", 1, None)], 8),    # fold up
+        "stand": ([pose(0, "stand", "up", dy, None) for dy in (0, 0, 1, 0)], 2),
+        "hop": ([pose(3, "crouch", "up", 2, None),
+                 pose(-1, "stand", "up", 0, 0.8),          # push off
+                 pose(-1, "dangle", "up", 0, -0.5),        # airborne
+                 pose(0, "stand", "up", 0, 0.8),           # touch down
+                 pose(3, "crouch", "up", 2, None)], 10),
+        "takeoff": ([pose(3, "crouch", "up", 2, None),
+                     pose(3, "crouch", "up", 2, 1.0),      # wings up
+                     pose(-1, "stand", "up", 0, -1.0),     # leap on the downstroke
+                     pose(-2, "dangle", "tucked", 0, 0.9),
+                     pose(-2, "trail", "tucked", 0, 0.0)], 9),
+    }
+    rows = [frames for frames, _ in anims.values()]
     ini = [f"frameWidth={w}", f"frameHeight={h}",
-           "speed=60        ; pixels per second at 1x", "",
-           "[fly]", "row=0", f"frames={n}", "fps=7", ""]
+           "speed=60        ; pixels per second at 1x", ""]
+    for row, (name, (frames, fps)) in enumerate(anims.items()):
+        ini += [f"[{name}]", f"row={row}", f"frames={len(frames)}", f"fps={fps}", ""]
     return rows, ini
 
 

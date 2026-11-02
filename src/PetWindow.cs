@@ -26,7 +26,7 @@ namespace DesktopPet
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
             this.pet = pet;
-            wanderer = new Wanderer(Roam(), pet.Speed, pet.Has("glide"), pet.Headings == 1);
+            wanderer = new Wanderer(Roam(), pet);
             anim = pet.Anims[0];
             timer.Interval = TickMs;
             timer.Tick += delegate { Tick(); };
@@ -71,7 +71,7 @@ namespace DesktopPet
         public void SetPet(PetSpec next)
         {
             pet = next;
-            wanderer.Configure(next.Speed, next.Has("glide"), next.Headings == 1);
+            wanderer.Configure(next);
             anim = next.Find(wanderer.Animation);
             frame = 0;
             direction = next.Direction(wanderer.Heading, wanderer.FacingRight);
@@ -97,8 +97,13 @@ namespace DesktopPet
             // The wanderer picks the animation and how fast it plays. Switching
             // animations keeps the frame position, so swim and glide blend.
             anim = pet.Find(wanderer.Animation);
-            frameClock = (frameClock + dt * anim.Fps * wanderer.AnimRate) % anim.Frames;
-            frame = (int)frameClock;
+            if (wanderer.OneShot >= 0)
+                frame = Math.Min(anim.Frames - 1, (int)(wanderer.OneShot * anim.Frames));
+            else
+            {
+                frameClock = (frameClock + dt * anim.Fps * wanderer.AnimRate) % anim.Frames;
+                frame = (int)frameClock;
+            }
             direction = pet.Direction(wanderer.Heading, wanderer.FacingRight);
             Draw(anim != shownAnim || frame != shownFrame || direction != shownDirection);
 

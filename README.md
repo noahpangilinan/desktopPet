@@ -10,7 +10,7 @@ Comes with three animals, and adding more means dropping in a folder:
 | --- | --- |
 | **Koi** | Swims like a real one: a few strong tail beats, then a long glide, sometimes settling to rest. Turns to face any direction along curving, meandering paths |
 | **Flatfish** | A flounder that swims the same way, its fin skirt rippling along its edges as it goes |
-| **Heron** | Flaps steadily along gentle arcs, mirrored to face the way it's flying |
+| **Heron** | Flaps steadily along gentle arcs. Every so often it comes down to land on the taskbar (or the Dock on a Mac), stands around, hops and turns, then takes off again |
 
 Both versions are tiny and need nothing extra installed beyond the platform's own compiler.
 They use about 0.2% CPU, and the picture only changes when the animation frame does.
@@ -94,6 +94,8 @@ Animation names the app understands:
 | --- | --- |
 | `swim` | The tail-beat burst. Played fast while the pet pushes forward |
 | `glide` | Coasting and resting. If a pet has this, it swims in bursts and glides between them |
+| `land`, `stand`, `takeoff` | Perching, for side-on pets. With all three, the pet sometimes flies down to the bottom of the screen (the top of the taskbar or Dock), plays `land` once, loops `stand`, then plays `takeoff` once and flies off. Draw standing frames with the feet on the bottom row |
+| `hop` | Optional while perched: played once per short hop along the ground |
 | anything else | The first animation is used for normal steady movement (the heron's `fly`) |
 
 Rebuild and restart. The new animal appears in the Pet menu, named after its folder.

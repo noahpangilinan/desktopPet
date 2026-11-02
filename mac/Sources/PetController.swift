@@ -16,8 +16,7 @@ final class PetController: NSObject {
 
     init(pet: PetSpec) {
         self.pet = pet
-        wanderer = Wanderer(area: PetController.roam(pet), cruise: pet.speed,
-                            burstGlide: pet.has("glide"), sideOn: pet.headings == 1)
+        wanderer = Wanderer(area: PetController.roam(pet), pet: pet)
 
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: pet.width, height: pet.height),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -66,7 +65,7 @@ final class PetController: NSObject {
     // Swap in a different pet (or the same pet at another size).
     func setPet(_ next: PetSpec) {
         pet = next
-        wanderer.configure(cruise: next.speed, burstGlide: next.has("glide"), sideOn: next.headings == 1)
+        wanderer.configure(pet: next)
         resize()
         draw()
     }
@@ -106,9 +105,14 @@ final class PetController: NSObject {
         // The wanderer picks the animation and how fast it plays. Switching
         // animations keeps the frame position, so swim and glide blend.
         let anim = pet.find(wanderer.animation)
-        frameClock = (frameClock + dt * anim.fps * wanderer.animRate)
-            .truncatingRemainder(dividingBy: Double(anim.frames))
-        let frame = min(anim.frames - 1, Int(frameClock))
+        let frame: Int
+        if wanderer.oneShot >= 0 {
+            frame = min(anim.frames - 1, Int(wanderer.oneShot * Double(anim.frames)))
+        } else {
+            frameClock = (frameClock + dt * anim.fps * wanderer.animRate)
+                .truncatingRemainder(dividingBy: Double(anim.frames))
+            frame = min(anim.frames - 1, Int(frameClock))
+        }
         let direction = pet.direction(heading: wanderer.heading, facingRight: wanderer.facingRight)
 
         if shown == nil || shown!.anim != anim.name || shown!.frame != frame || shown!.direction != direction {
