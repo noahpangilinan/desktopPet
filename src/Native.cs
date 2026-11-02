@@ -63,6 +63,16 @@ namespace DesktopPet
         [DllImport("gdi32.dll")]
         public static extern bool DeleteObject(IntPtr obj);
 
+        public const int SRCCOPY = 0x00CC0020;
+        public const int COLORONCOLOR = 3;   // nearest-neighbour stretching
+
+        [DllImport("gdi32.dll")]
+        public static extern int SetStretchBltMode(IntPtr hdc, int mode);
+
+        [DllImport("gdi32.dll")]
+        public static extern bool StretchBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest,
+            IntPtr hdcSrc, int xSrc, int ySrc, int wSrc, int hSrc, int rop);
+
         // Show the bitmap selected into memDc as the window's whole content, at (x, y).
         public static void PaintLayered(IntPtr hwnd, IntPtr memDc, int x, int y, int width, int height)
         {

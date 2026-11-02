@@ -1,11 +1,15 @@
 """Draw the built-in pet sprite sheets.
 
-Each sheet is one row of frames facing right, written to pets/<name>/sheet.png.
+Each animation is a block of rows in pets/<name>/sheet.png: one row of frames
+for a side-on pet (drawn facing right, mirrored by the app), or one row per
+heading for a top-down pet (heading 0 faces right, then clockwise). pet.ini
+says where each animation starts.
+
 Shapes are rasterized straight onto the pixel grid with no antialiasing, then
 given a one-pixel dark outline, so the result stays crisp when scaled up.
 
 Run from the repo root:  py tools/draw_sprites.py
-Pass --preview to also write an 8x enlarged copy next to each sheet.
+Pass --preview to also write an enlarged copy next to each sheet.
 """
 
 import math
@@ -41,11 +45,14 @@ def outline(img, color):
     return out
 
 
-# --- Koi: top-down, swimming right ---------------------------------------
+# --- Koi: top-down, any heading ------------------------------------------
 
 KOI = {
-    "size": (32, 16),
-    "frames": 6,
+    "size": 32,
+    "frames": 8,
+    "headings": 16,
+    # name: (tail sway in pixels, pectoral fin reach, fin flap)
+    "anims": {"swim": (2.4, 2.6, 0.7), "glide": (0.8, 1.8, 0.3)},
     "white": rgba("#f4f1ea"),
     "shade": rgba("#d9d3c7"),
     "red": rgba("#e0472b"),
@@ -55,16 +62,24 @@ KOI = {
 }
 
 
-def koi_frame(phase):
-    w, h = KOI["size"]
-    img = Image.new("RGBA", (w, h), CLEAR)
+def koi_frame(phase, angle, sway, fin_reach, fin_flap):
+    """The koi at one point in its tail cycle, its head pointing along angle.
+
+    Each pixel centre is turned back into the fish's own coordinates (u runs
+    tail to head, v across the body) and tested against the body shape there,
+    so every heading is drawn fresh instead of rotating finished pixels.
+    """
+    size = KOI["size"]
+    img = Image.new("RGBA", (size, size), CLEAR)
     px = img.load()
-    tail_x, head_x = 3, 29
-    mid_y = h / 2 - 0.5
+    centre = size / 2
+    tail_u, head_u = -13.0, 13.0
+    length = head_u - tail_u
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
 
     def spine(t):
         # Sideways wave that travels toward the tail and grows there.
-        return mid_y + 2.4 * math.sin(phase - 3.2 * t) * (1 - t) ** 1.6
+        return sway * math.sin(phase - 3.2 * t) * (1 - t) ** 1.6
 
     def half_width(t):
         if t < 0.16:  # forked tail fin
@@ -74,19 +89,32 @@ def koi_frame(phase):
         body = math.sin(min(1.0, (t - 0.24) / 0.76) * math.pi * 0.92)
         return 1.0 + 3.0 * body
 
-    # Body and tail, column by column, so markings can use body coordinates.
-    for x in range(tail_x, head_x + 1):
-        t = (x - tail_x) / (head_x - tail_x)
-        cy, hw = spine(t), half_width(t)
-        for y in range(h):
-            s = (y - cy) / hw if hw else 0
-            if abs(y - cy) > hw:
+    def to_pixel(u, v):
+        x = centre + u * cos_a - v * sin_a
+        y = centre + u * sin_a + v * cos_a
+        return int(math.floor(x)), int(math.floor(y))
+
+    reach = fin_reach + fin_flap * math.sin(phase)
+    for y in range(size):
+        for x in range(size):
+            dx, dy = x + 0.5 - centre, y + 0.5 - centre
+            u = dx * cos_a + dy * sin_a
+            v = -dx * sin_a + dy * cos_a
+            t = (u - tail_u) / length
+            if not 0 <= t <= 1:
                 continue
+            cy, hw = spine(t), half_width(t)
+            off = abs(v - cy)
+            if off > hw:
+                # Pectoral fins: swept-back paddles just behind the head.
+                d = off - hw
+                if d <= reach and 0.66 - 0.035 * d <= t <= 0.76 - 0.035 * d:
+                    px[x, y] = KOI["fin"]
+                continue
+            s = (v - cy) / hw
             if t < 0.16:
-                # Notch the fork in the middle of the tail.
-                if abs(s) < 0.35 and t < 0.1:
-                    continue
-                px[x, y] = KOI["fin"]
+                if not (abs(s) < 0.35 and t < 0.1):  # notch the fork
+                    px[x, y] = KOI["fin"]
                 continue
             color = KOI["white"]
             if abs(s) > 0.75:
@@ -100,26 +128,30 @@ def koi_frame(phase):
                 color = KOI["red"]  # tancho spot on the head
             px[x, y] = color
 
-    # Pectoral fins, flapping slightly against the swim phase.
-    fin_t = 0.72
-    fx = round(tail_x + fin_t * (head_x - tail_x))
-    cy, hw = spine(fin_t), half_width(fin_t)
-    reach = 2 + (1 if math.sin(phase) > 0 else 0)
-    for side in (-1, 1):
-        for i in range(reach):
-            y = round(cy + side * (hw + 1 + i))
-            for x in range(fx - 2 - i, fx + 1 - i):
-                if 0 <= y < h and not px[x, y][3]:
-                    px[x, y] = KOI["fin"]
-
-    # Eyes near the front of the head.
+    # Eyes near the front of the head, only where they land on the body.
     eye_t = 0.94
-    ex = round(tail_x + eye_t * (head_x - tail_x))
-    cy, hw = spine(eye_t), half_width(eye_t)
     for side in (-1, 1):
-        px[ex, round(cy + side * (hw - 0.6))] = KOI["eye"]
+        ex, ey = to_pixel(tail_u + eye_t * length,
+                          spine(eye_t) + side * (half_width(eye_t) - 0.6))
+        if 0 <= ex < size and 0 <= ey < size and px[ex, ey][3]:
+            px[ex, ey] = KOI["eye"]
 
     return outline(img, KOI["line"])
+
+
+def koi_sheet():
+    size, n, headings = KOI["size"], KOI["frames"], KOI["headings"]
+    rows = []
+    for sway, fin_reach, fin_flap in KOI["anims"].values():
+        for h in range(headings):
+            angle = 2 * math.pi * h / headings
+            rows.append([koi_frame(2 * math.pi * i / n, angle, sway, fin_reach, fin_flap)
+                         for i in range(n)])
+    ini = [f"frameWidth={size}", f"frameHeight={size}", f"headings={headings}",
+           "speed=30        ; pixels per second at 1x", ""]
+    for i, name in enumerate(KOI["anims"]):
+        ini += [f"[{name}]", f"row={i * headings}", f"frames={n}", "fps=10", ""]
+    return rows, ini
 
 
 # --- Heron: side view, flying right --------------------------------------
@@ -144,9 +176,7 @@ def heron_frame(phase):
     w, h = HERON["size"]
     img = Image.new("RGBA", (w, h), CLEAR)
     d = ImageDraw.Draw(img)
-    bob = round(-1.2 * math.sin(phase))  # body lifts on the downstroke
-
-    b = bob
+    b = round(-1.2 * math.sin(phase))  # body lifts on the downstroke
 
     # Long legs trailing well past the tail, toes dropped.
     d.line([(11, 18 + b), (0, 20 + b)], fill=HERON["leg"])
@@ -186,24 +216,36 @@ def heron_frame(phase):
     return outline(img, HERON["line"])
 
 
+def heron_sheet():
+    (w, h), n = HERON["size"], HERON["frames"]
+    rows = [[heron_frame(2 * math.pi * i / n) for i in range(n)]]
+    ini = [f"frameWidth={w}", f"frameHeight={h}",
+           "speed=60        ; pixels per second at 1x", "",
+           "[fly]", "row=0", f"frames={n}", "fps=7", ""]
+    return rows, ini
+
+
 # --- Output --------------------------------------------------------------
 
-def make_sheet(name, spec, draw):
-    fw, fh = spec["size"]
-    n = spec["frames"]
-    sheet = Image.new("RGBA", (fw * n, fh), CLEAR)
-    for i in range(n):
-        sheet.paste(draw(2 * math.pi * i / n), (i * fw, 0))
-    out = ROOT / "pets" / name / "sheet.png"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(out)
+def write_pet(name, rows, ini):
+    fw, fh = rows[0][0].size
+    cols = max(len(r) for r in rows)
+    sheet = Image.new("RGBA", (fw * cols, fh * len(rows)), CLEAR)
+    for y, row in enumerate(rows):
+        for x, frame in enumerate(row):
+            sheet.paste(frame, (x * fw, y * fh))
+    folder = ROOT / "pets" / name
+    folder.mkdir(parents=True, exist_ok=True)
+    sheet.save(folder / "sheet.png")
+    (folder / "pet.ini").write_text("\n".join(ini), encoding="ascii")
     if "--preview" in sys.argv:
-        big = sheet.resize((sheet.width * 8, sheet.height * 8), Image.NEAREST)
+        zoom = 8 if sheet.height <= 64 else 3
+        big = sheet.resize((sheet.width * zoom, sheet.height * zoom), Image.NEAREST)
         backdrop = Image.new("RGBA", big.size, (90, 120, 150, 255))
-        Image.alpha_composite(backdrop, big).save(out.with_name("preview.png"))
-    print(f"wrote {out.relative_to(ROOT)} ({n} frames of {fw}x{fh})")
+        Image.alpha_composite(backdrop, big).save(folder / "preview.png")
+    print(f"wrote pets/{name}: {len(rows)} rows of {cols} frames, {fw}x{fh}")
 
 
 if __name__ == "__main__":
-    make_sheet("koi", KOI, koi_frame)
-    make_sheet("heron", HERON, heron_frame)
+    write_pet("koi", *koi_sheet())
+    write_pet("heron", *heron_sheet())

@@ -5,6 +5,10 @@ window but ignores the mouse completely, so you can click and type straight thro
 
 Comes with a **koi** and a **heron**. Adding more animals means dropping in a folder.
 
+The koi swims like a real one: a few strong tail beats, then a long glide, sometimes
+settling to rest. It turns to face any direction, following curving, meandering paths.
+The heron flaps steadily along gentle arcs.
+
 - ~20 KB exe, nothing to install: it builds with the C# compiler that ships with Windows
 - About 0.2% CPU and ~30 MB of RAM. Frames are pre-rendered once, so each tick only moves the window
 - Never steals focus and stays out of the taskbar and Alt-Tab
@@ -36,21 +40,39 @@ Choices are saved in `settings.ini` next to the exe.
 
 ## Adding an animal
 
-Make a folder `pets\<name>\` with two files:
+Make a folder `pets\<name>\` with a `sheet.png` (transparent background) and a `pet.ini`.
+Each `[section]` in `pet.ini` is one animation, and `row` says where it starts in the sheet:
 
-- `sheet.png`: one row of animation frames, drawn **facing right**, with a transparent background
-- `pet.ini`:
+```ini
+frameWidth=32   ; size of one frame in pixels
+frameHeight=32
+speed=50        ; pixels per second at 1x
+headings=1      ; see below
 
-  ```ini
-  frameWidth=32   ; size of one frame in pixels
-  frameHeight=32
-  frames=6        ; number of frames in the row
-  fps=8           ; animation speed while moving at full pace
-  speed=50        ; pixels per second at 1x
-  ```
+[fly]
+row=0           ; first row of this animation in sheet.png
+frames=6        ; frames across the row
+fps=8           ; animation speed at full pace
+```
+
+There are two kinds of pet:
+
+- **Side-on** (`headings=1`, the default; e.g. the heron): one row per animation, drawn
+  **facing right**. The app mirrors it when it moves left and keeps it mostly level.
+- **Top-down** (`headings=16`; e.g. the koi): each animation takes 16 rows, one per
+  heading. Heading 0 faces right and each next row turns 22.5° clockwise. The pet
+  turns to face exactly where it's going, so it can swim in any direction.
+
+Animation names the app understands:
+
+| Name | Used for |
+| --- | --- |
+| `swim` | The tail-beat burst. Played fast while the pet pushes forward |
+| `glide` | Coasting and resting. If a pet has this, it swims in bursts and glides between them |
+| anything else | The first animation is used for normal steady movement (the heron's `fly`) |
 
 Rebuild (or copy the folder into `bin\pets\`) and restart. It appears in the Pet menu,
-named after the folder. The pet is mirrored automatically when it moves left.
+named after the folder.
 
 ## Redrawing the built-in sprites
 

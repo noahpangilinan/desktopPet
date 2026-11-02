@@ -16,8 +16,9 @@ namespace DesktopPet
         PetSpec pet;
         Wanderer wanderer;
         double frameClock, topmostClock;
-        int frame = -1, shownX = int.MinValue, shownY = int.MinValue;
-        bool shownFacing;
+        Anim anim, shownAnim;
+        int frame, direction, shownFrame = -1, shownDirection = -1;
+        int shownX = int.MinValue, shownY = int.MinValue;
 
         public PetWindow(PetSpec pet)
         {
@@ -25,7 +26,8 @@ namespace DesktopPet
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
             this.pet = pet;
-            wanderer = new Wanderer(Roam(), pet.Speed);
+            wanderer = new Wanderer(Roam(), pet.Speed, pet.Has("glide"), pet.Headings == 1);
+            anim = pet.Anims[0];
             timer.Interval = TickMs;
             timer.Tick += delegate { Tick(); };
         }
@@ -69,8 +71,10 @@ namespace DesktopPet
         public void SetPet(PetSpec next)
         {
             pet = next;
-            wanderer.SetSpeed(next.Speed);
+            wanderer.Configure(next.Speed, next.Has("glide"), next.Headings == 1);
+            anim = next.Find(wanderer.Animation);
             frame = 0;
+            direction = next.Direction(wanderer.Heading, wanderer.FacingRight);
             if (IsHandleCreated)
                 Draw(true);
         }
@@ -88,15 +92,15 @@ namespace DesktopPet
             double dt = Math.Min(0.25, clock.Elapsed.TotalSeconds);
             clock.Restart();
 
-            wanderer.Step(dt, Roam());
+            wanderer.Step(dt, Roam(), Math.Max(pet.Width, pet.Height));
 
-            // Animate faster while moving, lazily while idling.
-            frameClock += dt * pet.Fps * (0.35 + 0.65 * wanderer.Pace);
-            int nextFrame = (int)frameClock % pet.FrameCount;
-            frameClock %= pet.FrameCount;
-            bool newFrame = nextFrame != frame || wanderer.FacingRight != shownFacing;
-            frame = nextFrame;
-            Draw(newFrame);
+            // The wanderer picks the animation and how fast it plays. Switching
+            // animations keeps the frame position, so swim and glide blend.
+            anim = pet.Find(wanderer.Animation);
+            frameClock = (frameClock + dt * anim.Fps * wanderer.AnimRate) % anim.Frames;
+            frame = (int)frameClock;
+            direction = pet.Direction(wanderer.Heading, wanderer.FacingRight);
+            Draw(anim != shownAnim || frame != shownFrame || direction != shownDirection);
 
             topmostClock += dt;
             if (topmostClock >= TopmostEverySeconds)
@@ -107,16 +111,17 @@ namespace DesktopPet
             }
         }
 
-        // Repaint the bitmap only when the frame changes; otherwise just move.
+        // Repaint only when the picture changes; otherwise just move the window.
         void Draw(bool newFrame)
         {
             int x = (int)Math.Round(wanderer.X), y = (int)Math.Round(wanderer.Y);
             if (newFrame)
             {
-                if (frame < 0) frame = 0;
-                IntPtr dc = pet.Select(frame, wanderer.FacingRight);
+                IntPtr dc = pet.Draw(anim, frame, direction);
                 Native.PaintLayered(Handle, dc, x, y, pet.Width, pet.Height);
-                shownFacing = wanderer.FacingRight;
+                shownAnim = anim;
+                shownFrame = frame;
+                shownDirection = direction;
             }
             else if (x != shownX || y != shownY)
             {
