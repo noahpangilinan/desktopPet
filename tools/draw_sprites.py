@@ -99,6 +99,7 @@ KOI = {
     "white": rgba("#f4f1ea"),
     "shade": rgba("#d9d3c7"),
     "red": rgba("#e0472b"),
+    "sumi": rgba("#18171b"),      # black marking
     "fin": rgba("#e9e4da"),
     "eye": rgba("#1d1f24"),
     "line": rgba("#2b2a2e"),
@@ -146,7 +147,7 @@ def koi_frame(phase, angle, sway, fin_reach, fin_flap):
         if ((t - 0.42) / 0.11) ** 2 + ((s + 0.25) / 0.85) ** 2 < 1:
             color = KOI["red"]
         if ((t - 0.66) / 0.09) ** 2 + ((s - 0.3) / 0.8) ** 2 < 1:
-            color = KOI["red"]
+            color = KOI["sumi"]  # black patch on the shoulders
         if ((t - 0.88) / 0.05) ** 2 + (s / 0.55) ** 2 < 1:
             color = KOI["red"]  # tancho spot on the head
         return color
