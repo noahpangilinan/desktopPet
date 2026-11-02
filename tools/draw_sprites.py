@@ -69,7 +69,20 @@ def top_down(size, angle, paint, eyes, line):
         ey = int(math.floor(centre + u * sin_a + v * cos_a))
         if 0 <= ex < size and 0 <= ey < size and px[ex, ey][3]:
             px[ex, ey] = color
-    return outline(img, line)
+    return with_shadow(outline(img, line))
+
+
+SHADOW = (0, 0, 0, 64)
+SHADOW_OFFSET = 2  # pixels down and right, the same on screen at every heading
+
+
+def with_shadow(img):
+    """Lay a faint copy of the silhouette under the sprite, offset down-right,
+    so swimmers read as being a little above the bottom."""
+    mask = img.getchannel("A").point(lambda a: 255 if a else 0)
+    shadow = Image.new("RGBA", img.size, CLEAR)
+    shadow.paste(Image.new("RGBA", img.size, SHADOW), (SHADOW_OFFSET, SHADOW_OFFSET), mask)
+    return Image.alpha_composite(shadow, img)
 
 
 def top_down_sheet(spec, frame, speed):
@@ -90,7 +103,7 @@ def top_down_sheet(spec, frame, speed):
 # --- Koi: top-down, any heading ------------------------------------------
 
 KOI = {
-    "size": 32,
+    "size": 36,
     "frames": 8,
     "headings": 16,
     # name: (tail sway in pixels, pectoral fin reach, fin flap)
@@ -161,7 +174,7 @@ def koi_frame(phase, angle, sway, fin_reach, fin_flap):
 # --- Flatfish: top-down flounder, any heading ----------------------------
 
 FLATFISH = {
-    "size": 32,
+    "size": 36,
     "frames": 8,
     "headings": 16,
     # name: (fin ripple height,)
@@ -245,14 +258,14 @@ def flatfish_frame(phase, angle, ripple):
 # --- Manta ray: top-down, any heading ------------------------------------
 
 MANTA = {
-    "size": 32,
+    "size": 36,
     "frames": 8,
     "headings": 16,
     # name: (how far the wings fold in at the top and bottom of a beat,)
     "anims": {"swim": (0.32,), "glide": (0.07,)},
     "fps": {"swim": 6, "glide": 4},
     "back": rgba("#211b38"),      # deep indigo
-    "edge": rgba("#2f2650"),      # slightly lighter wing margins
+    "edge": rgba("#6b55b0"),      # bright violet wing margins, visible on dark windows
     "purple": rgba("#7b3fb0"),    # ube
     "lilac": rgba("#c7a0ea"),
     "belly": rgba("#e9e3f2"),     # pale underside peeking at the horn fins
@@ -499,16 +512,42 @@ def heron_sheet():
     return rows, ini
 
 
+# --- Effects --------------------------------------------------------------
+
+RIPPLE = {"size": 32, "frames": 7, "fps": 10}
+
+
+def ripple_sheet():
+    """An expanding ring of water that fades out, spawned under swimmers."""
+    size, n = RIPPLE["size"], RIPPLE["frames"]
+    frames = []
+    for i in range(n):
+        img = Image.new("RGBA", (size, size), CLEAR)
+        d = ImageDraw.Draw(img)
+        t = i / (n - 1)
+        r = 3 + t * 12
+        alpha = int(170 * (1 - t) ** 1.3) + 15
+        c = size / 2 - 0.5
+        d.ellipse([c - r, c - r, c + r, c + r], outline=(235, 245, 255, alpha))
+        if i >= 2:  # a fainter inner ring trailing behind
+            r2 = r * 0.6
+            d.ellipse([c - r2, c - r2, c + r2, c + r2], outline=(235, 245, 255, alpha // 2))
+        frames.append(img)
+    ini = [f"frameWidth={size}", f"frameHeight={size}", "",
+           "[ripple]", "row=0", f"frames={n}", f"fps={RIPPLE['fps']}", ""]
+    return [frames], ini
+
+
 # --- Output --------------------------------------------------------------
 
-def write_pet(name, rows, ini):
+def write_pet(name, rows, ini, folder="pets"):
     fw, fh = rows[0][0].size
     cols = max(len(r) for r in rows)
     sheet = Image.new("RGBA", (fw * cols, fh * len(rows)), CLEAR)
     for y, row in enumerate(rows):
         for x, frame in enumerate(row):
             sheet.paste(frame, (x * fw, y * fh))
-    folder = ROOT / "pets" / name
+    folder = ROOT / folder / name
     folder.mkdir(parents=True, exist_ok=True)
     sheet.save(folder / "sheet.png")
     (folder / "pet.ini").write_text("\n".join(ini), encoding="ascii")
@@ -517,7 +556,7 @@ def write_pet(name, rows, ini):
         big = sheet.resize((sheet.width * zoom, sheet.height * zoom), Image.NEAREST)
         backdrop = Image.new("RGBA", big.size, (90, 120, 150, 255))
         Image.alpha_composite(backdrop, big).save(folder / "preview.png")
-    print(f"wrote pets/{name}: {len(rows)} rows of {cols} frames, {fw}x{fh}")
+    print(f"wrote {folder.relative_to(ROOT).as_posix()}: {len(rows)} rows of {cols} frames, {fw}x{fh}")
 
 
 if __name__ == "__main__":
@@ -525,3 +564,4 @@ if __name__ == "__main__":
     write_pet("flatfish", *top_down_sheet(FLATFISH, flatfish_frame, speed=22))
     write_pet("manta", *top_down_sheet(MANTA, manta_frame, speed=24))
     write_pet("heron", *heron_sheet())
+    write_pet("ripple", *ripple_sheet(), folder="effects")

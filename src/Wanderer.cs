@@ -1,30 +1,45 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 
 namespace DesktopPet
 {
-    // Moves a pet around a rectangle the way an animal would: it keeps a heading
+    // Moves a pet around the desktop the way an animal would: it keeps a heading
     // and can only turn so fast, so paths curve; a slow wobble makes them meander;
-    // edges push it back toward open space. Pets with a glide animation swim in
-    // bursts (a few strong tail beats) followed by coasting, and sometimes rest.
+    // screen edges with no neighbouring screen push it back. Pets with a glide
+    // animation swim in bursts (a few strong tail beats) followed by coasting,
+    // and sometimes rest. Swimmers are moody about the cursor: a swipe always
+    // scares them, and when it comes near they're either spooked or hungry,
+    // swimming up to nibble it a few times like fish taking food. Pets steer
+    // around each other.
     //
     // Side-on pets with land, stand and takeoff animations (birds) also perch:
-    // every so often they fly down to the bottom edge (the top of the taskbar),
-    // land, stand around hopping and turning, then take off again.
+    // every so often they fly down to the taskbar or the top edge of a window,
+    // land, stand around hopping and turning, then take off again. They take
+    // off early if the cursor comes close or their window moves or is covered.
     sealed class Wanderer
     {
         public double X, Y;                // top-left of the pet, in screen pixels
+        public int Width, Height;
         public double Heading;             // radians, 0 = right, clockwise
         public bool FacingRight = true;    // for side-on pets
         public string Animation;           // null = the pet's first animation
         public double AnimRate = 1;        // multiplier on the animation's fps
         public double OneShot = -1;        // 0..1 through a play-once animation, or -1 to loop
+        public bool Ripple;                // true for one step when a swimmer disturbs the water
+        public double RippleX, RippleY;    // where, when Ripple is set
+        public bool AvoidOthers = true;    // steer around other pets (Activity setting)
+
+        public double CenterX { get { return X + Width / 2.0; } }
+        public double CenterY { get { return Y + Height / 2.0; } }
+        public bool Grounded { get { return mode != Mode.Fly; } }
 
         enum Phase { Burst, Glide, Rest }
         enum Mode { Fly, Landing, Perched, Hopping, TakingOff }
 
         const double MaxTurn = 1.8;        // radians per second while bursting
         const double SideOnPitch = 0.6;    // side-on pets stay within this of level
+        const double FastCursor = 1200;    // pixels per second that counts as a swipe
 
         readonly Random random = new Random();
         double cruise, speed, turnRate, clock;
@@ -37,25 +52,39 @@ namespace DesktopPet
         // Perching. A time of 0 means the pet lacks that animation.
         double landTime, hopTime, takeoffTime;
         Mode mode = Mode.Fly;
-        double modeTime, startX, startY, endX;
+        double modeTime, modeLength, startX, startY, endX;
         double flyLeft, perchLeft, restLeft, approachLeft;
         bool approaching;
+        long perchId;
+        int perchTop;
 
-        public Wanderer(Rectangle area, PetSpec pet)
+        // Reactions. A curious swimmer hovers by the cursor and nibbles it.
+        double boostLeft, startleCooldown, rippleCooldown, curiousLeft, curiousCooldown;
+        bool curious, nibbleIn, cursorWasNear;
+        int bites;
+        double nibbleWait;
+
+        public Wanderer(World world, PetSpec pet)
         {
-            X = area.Left + random.NextDouble() * area.Width;
-            Y = area.Top + random.NextDouble() * area.Height;
+            Width = pet.Width;
+            Height = pet.Height;
+            Rectangle work = world.WorkAreas.Count > 0 ? world.WorkAreas[0] : new Rectangle(0, 0, 800, 600);
+            X = work.Left + random.NextDouble() * Math.Max(0, work.Width - Width);
+            Y = work.Top + random.NextDouble() * Math.Max(0, work.Height - Height);
             Heading = random.NextDouble() * 2 * Math.PI;
             wobbleA = random.NextDouble() * 10;
             wobbleB = random.NextDouble() * 10;
             Configure(pet);
-            PickTarget(area);
+            PickTarget(world);
         }
 
         bool CanPerch { get { return landTime > 0 && takeoffTime > 0; } }
+        double Size { get { return Math.Max(Width, Height); } }
 
         public void Configure(PetSpec pet)
         {
+            Width = pet.Width;
+            Height = pet.Height;
             cruise = pet.Speed;
             burstGlide = pet.Has("glide");
             sideOn = pet.Headings == 1;
@@ -69,6 +98,7 @@ namespace DesktopPet
                 Heading = Math.Cos(Heading) >= 0 ? 0 : Math.PI;
             mode = Mode.Fly;
             approaching = false;
+            curious = false;
             flyLeft = 6 + random.NextDouble() * 10;
             StartPhase(Phase.Burst);
         }
@@ -79,52 +109,225 @@ namespace DesktopPet
             return a.Frames / a.Fps;
         }
 
-        // area is where the pet's top-left corner may go; size is the pet's size.
-        // Its bottom edge is the ground birds land on.
-        public void Step(double dt, Rectangle area, int size)
+        // flock is every pet, including this one.
+        public void Step(double dt, World world, IList<Wanderer> flock)
         {
             clock += dt;
             modeTime += dt;
             OneShot = -1;
             AnimRate = 1;
+            Ripple = false;
+            boostLeft -= dt;
+            startleCooldown -= dt;
+            rippleCooldown -= dt;
+
+            React(dt, world);
             switch (mode)
             {
-                case Mode.Fly: Fly(dt, area, size); break;
-                case Mode.Landing: Land(area); break;
-                case Mode.Perched: Perch(dt, area, size); break;
-                case Mode.Hopping: Hop(area, size); break;
-                case Mode.TakingOff: TakeOff(area, size); break;
+                case Mode.Fly: Fly(dt, world, flock); break;
+                case Mode.Landing: Land(world); break;
+                case Mode.Perched: Perch(dt, world); break;
+                case Mode.Hopping: Hop(world); break;
+                case Mode.TakingOff: TakeOff(world); break;
             }
         }
 
-        void Fly(double dt, Rectangle area, int size)
+        // The cursor. A swipe nearby always startles. Birds won't let it get
+        // close. Swimmers pick a mood when it comes near: sometimes spooked,
+        // sometimes hungry, coming over to nibble it once it settles.
+        void React(double dt, World world)
         {
-            // Time to come down? Pick a spot on the ground ahead and head for it.
+            if (!world.TrackCursor)
+            {
+                curious = false;
+                return;
+            }
+            double dx = CenterX - world.CursorX, dy = CenterY - world.CursorY;
+            double d = Math.Max(0.01, Math.Sqrt(dx * dx + dy * dy));
+            bool swipe = world.CursorSpeed > FastCursor && d < Size * 3;
+
+            if (mode == Mode.Perched || mode == Mode.Hopping)
+            {
+                if (d < Size * 1.6 || swipe)
+                {
+                    FacingRight = dx > 0;   // away from the cursor
+                    StartTakeoff(true);
+                }
+                return;
+            }
+            if (mode != Mode.Fly)
+                return;
+
+            curiousCooldown -= dt;
+            bool near = d < Size * 2.2;
+            bool entered = near && !cursorWasNear;
+            cursorWasNear = near;
+
+            if (swipe && startleCooldown <= 0)
+            {
+                Startle(dx, dy, 0.9);
+                return;
+            }
+            if (!burstGlide)
+                return;
+
+            // Spooked this time: the cursor drifting in is enough to send it off.
+            if (entered && !curious && world.CursorSpeed > 60 && startleCooldown <= 0 && random.NextDouble() < 0.4)
+            {
+                Startle(dx, dy, 0.6);
+                return;
+            }
+
+            if (curious)
+            {
+                curiousLeft -= dt;
+                if (world.CursorSpeed > 300 || curiousLeft <= 0 || d > 900)
+                {
+                    EndCurious(world, 4);
+                    return;
+                }
+                if (nibbleIn)
+                {
+                    // Dart in until the mouth touches the cursor.
+                    double reach = Size * 0.36;
+                    targetX = world.CursorX + dx / d * reach - Width / 2.0;
+                    targetY = world.CursorY + dy / d * reach - Height / 2.0;
+                }
+                else
+                {
+                    // Hover just out of reach, on the side it came from.
+                    double r = Size * 0.8;
+                    targetX = world.CursorX + dx / d * r - Width / 2.0;
+                    targetY = world.CursorY + dy / d * r - Height / 2.0;
+                }
+            }
+            else if (curiousCooldown <= 0 && world.CursorIdle > 1.0 && d < 700 && d > Size * 0.5
+                     && random.NextDouble() < dt * 0.35)
+            {
+                curious = true;
+                curiousLeft = 14;
+                bites = 2 + random.Next(3);
+                nibbleIn = false;
+                nibbleWait = 0.4;
+            }
+        }
+
+        void Startle(double dx, double dy, double boost)
+        {
+            startleCooldown = 2;
+            curious = false;
+            if (approaching)
+            {
+                approaching = false;
+                flyLeft = 4 + random.NextDouble() * 4;
+            }
+            double away = Math.Atan2(dy, dx);
+            targetX = X + Math.Cos(away) * Size * 6;
+            targetY = Y + Math.Sin(away) * Size * 6;
+            boostLeft = boost;
+            if (burstGlide)
+            {
+                Heading = Wrap(away);   // a sudden dart
+                turnRate = 0;
+                StartPhase(Phase.Burst);
+                MakeRipple();
+            }
+        }
+
+        void EndCurious(World world, double cooldown)
+        {
+            curious = false;
+            nibbleIn = false;
+            curiousCooldown = cooldown;
+            PickTarget(world);
+            StartPhase(Phase.Glide);
+        }
+
+        // Up close to the cursor: hold position facing it, then dart in, bite,
+        // and back off, a few times over.
+        void Nibble(double dt, World world)
+        {
+            double face = Math.Atan2(world.CursorY - CenterY, world.CursorX - CenterX);
+            double turn = Wrap(face - Heading);
+            Heading = Wrap(Heading + Math.Max(-4 * dt, Math.Min(4 * dt, turn)));
+            turnRate = 0;
+
+            double rate = nibbleIn ? 9 : 2.5;   // quick in, slower out
+            double nx = X + (targetX - X) * Math.Min(1, dt * rate);
+            double ny = Y + (targetY - Y) * Math.Min(1, dt * rate);
+            speed = Math.Sqrt((nx - X) * (nx - X) + (ny - Y) * (ny - Y)) / Math.Max(dt, 0.001);
+            X = nx;
+            Y = ny;
+            KeepOnScreens(world);
+            double left = Math.Sqrt((targetX - X) * (targetX - X) + (targetY - Y) * (targetY - Y));
+
+            if (nibbleIn)
+            {
+                Animation = "swim";
+                AnimRate = 1.6;
+                if (left < 3)
+                {
+                    // Bite: a ring of water where the mouth met the cursor.
+                    Ripple = true;
+                    RippleX = world.CursorX;
+                    RippleY = world.CursorY;
+                    rippleCooldown = 0.3;
+                    nibbleIn = false;
+                    nibbleWait = 0.4 + random.NextDouble() * 0.7;
+                    if (--bites <= 0)
+                        EndCurious(world, 15 + random.NextDouble() * 20);
+                }
+            }
+            else
+            {
+                Animation = "glide";
+                AnimRate = 0.6;
+                if (left < 6)
+                {
+                    nibbleWait -= dt;
+                    if (nibbleWait <= 0 && Math.Abs(turn) < 0.4)
+                        nibbleIn = true;
+                }
+            }
+        }
+
+        void Fly(double dt, World world, IList<Wanderer> flock)
+        {
+            Rectangle work = world.WorkAt(CenterX, CenterY);
+            Rectangle area = Roam(work);
+
+            // Time to come down? Pick somewhere to land and head for it.
             if (CanPerch && !approaching)
             {
                 flyLeft -= dt;
                 if (flyLeft <= 0)
-                {
-                    approaching = true;
-                    approachLeft = 20;
-                    double ahead = (FacingRight ? 1 : -1) * area.Width * (0.15 + random.NextDouble() * 0.3);
-                    targetX = Math.Max(area.Left + size, Math.Min(area.Right - size, X + ahead));
-                }
+                    ChoosePerch(world);
             }
             if (approaching)
             {
-                targetY = area.Bottom;
+                Surface s = world.Find(perchId, endX, endX + Width);
                 approachLeft -= dt;
-                if (approachLeft <= 0)
+                if (s == null || Math.Abs(s.Top - perchTop) > 2 || approachLeft <= 0)
                 {
-                    approaching = false;   // couldn't get there; try again later
-                    flyLeft = 5 + random.NextDouble() * 5;
-                    PickTarget(area);
+                    approaching = false;   // it moved, vanished, or we couldn't get there
+                    flyLeft = 4 + random.NextDouble() * 5;
+                    PickTarget(world);
+                }
+                else
+                {
+                    targetX = endX;
+                    targetY = perchTop - Height;
                 }
             }
 
             double dx = targetX - X, dy = targetY - Y;
             double dist = Math.Sqrt(dx * dx + dy * dy);
+
+            if (curious && dist < Size * 0.8)
+            {
+                Nibble(dt, world);
+                return;
+            }
 
             if (approaching)
             {
@@ -132,16 +335,19 @@ namespace DesktopPet
                 // animation starts at roughly cruising speed.
                 if (dist <= Math.Max(4, speed * landTime * 0.5))
                 {
-                    StartLanding(area);
+                    StartLanding();
                     return;
                 }
             }
-            else if (dist < Math.Max(size, cruise * 0.5))
+            else if (!curious && dist < Math.Max(Size, cruise * 0.5))
             {
-                // Reached the target: head somewhere new, or settle down for a while.
-                PickTarget(area);
+                // Reached the target: head somewhere new, or settle for a while.
+                PickTarget(world);
                 if (burstGlide && random.NextDouble() < 0.3)
+                {
                     StartPhase(Phase.Rest);
+                    MakeRipple();
+                }
                 dx = targetX - X;
                 dy = targetY - Y;
                 dist = Math.Sqrt(dx * dx + dy * dy);
@@ -151,41 +357,64 @@ namespace DesktopPet
             if (burstGlide && phaseLeft <= 0)
                 StartPhase(phase == Phase.Burst ? Phase.Glide : Phase.Burst);
 
-            // Speed: steady for flyers; thrust and coast for swimmers.
-            if (!burstGlide)
+            // Speed: steady for flyers; thrust and coast for swimmers; a
+            // startled pet briefly goes much faster.
+            bool boosted = boostLeft > 0;
+            if (boosted)
+                speed += (cruise * 2.6 - speed) * Math.Min(1, dt * 6);
+            else if (!burstGlide)
                 speed += (cruise - speed) * Math.Min(1, dt * 1.5);
             else if (phase == Phase.Burst)
                 speed += (cruise * 1.6 - speed) * Math.Min(1, dt * 3);
             else
                 speed *= Math.Exp(-dt * (phase == Phase.Rest ? 1.2 : 0.55));
 
-            // Where it wants to go: toward the target, away from nearby edges
-            // (except the ground while coming in to land), plus a slow wobble so
-            // it never moves in a dead straight line.
+            // Where it wants to go: toward the target, away from screen edges
+            // that have no neighbouring screen (except the ground while coming in
+            // to land) and away from other pets, plus a slow wobble so it never
+            // moves in a dead straight line.
             double wantX = dx / Math.Max(1, dist), wantY = dy / Math.Max(1, dist);
-            double margin = Math.Max(100, size * 2);
+            double margin = Math.Max(100, Size * 2);
             double edge = 0;
-            edge += Push(X - area.Left, margin, ref wantX, 1);
-            edge += Push(area.Right - X, margin, ref wantX, -1);
-            edge += Push(Y - area.Top, margin, ref wantY, 1);
-            if (!approaching)
+            if (!world.OnAnyScreen(work.Left - 2, CenterY))
+                edge += Push(X - area.Left, margin, ref wantX, 1);
+            if (!world.OnAnyScreen(work.Right + 2, CenterY))
+                edge += Push(area.Right - X, margin, ref wantX, -1);
+            if (!world.OnAnyScreen(CenterX, work.Top - 2))
+                edge += Push(Y - area.Top, margin, ref wantY, 1);
+            if (!approaching && !world.OnAnyScreen(CenterX, work.Bottom + 2))
                 edge += Push(area.Bottom - Y, margin, ref wantY, -1);
+            foreach (Wanderer o in flock)
+            {
+                if (!AvoidOthers || o == this || o.Grounded)
+                    continue;
+                double ox = CenterX - o.CenterX, oy = CenterY - o.CenterY;
+                double od = Math.Sqrt(ox * ox + oy * oy), reach = (Size + o.Size) * 0.55;
+                if (od < reach && od > 0.01)
+                {
+                    double push = (1 - od / reach) * 1.5;
+                    wantX += ox / od * push;
+                    wantY += oy / od * push;
+                }
+            }
             double wobble = 0.6 * Math.Sin(clock * 0.7 + wobbleA) + 0.3 * Math.Sin(clock * 1.9 + wobbleB);
-            double want = Math.Atan2(wantY, wantX) + wobble * Math.Max(0, 1 - edge) * (approaching ? 0.3 : 1);
+            double calm = Math.Max(0, 1 - edge) * (approaching || curious ? 0.3 : 1);
+            double want = Math.Atan2(wantY, wantX) + wobble * calm;
             if (sideOn)
                 want = Level(want);
 
             // Turn toward it, limited and eased. Swimmers turn mostly with
             // their tail, so they turn hardest while bursting.
-            double maxTurn = MaxTurn * (burstGlide && phase != Phase.Burst ? 0.45 : 1);
+            double maxTurn = MaxTurn * (burstGlide && phase != Phase.Burst && !boosted ? 0.45 : 1);
             double wantTurn = Math.Max(-maxTurn, Math.Min(maxTurn, Wrap(want - Heading) * 2.5));
             turnRate += (wantTurn - turnRate) * Math.Min(1, dt * 4);
             Heading = Wrap(Heading + turnRate * dt);
+            if (burstGlide && phase == Phase.Burst && Math.Abs(turnRate) > 1.3)
+                MakeRipple();   // a hard flick of the tail
 
             X += Math.Cos(Heading) * speed * dt;
             Y += Math.Sin(Heading) * speed * dt;
-            X = Math.Max(area.Left, Math.Min(area.Right, X));
-            Y = Math.Max(area.Top, Math.Min(area.Bottom, Y));
+            KeepOnScreens(world);
 
             // Only flip side-on sprites once clearly heading the other way.
             double c = Math.Cos(Heading);
@@ -198,7 +427,7 @@ namespace DesktopPet
                 Animation = null;
                 AnimRate = 0.35 + 0.65 * pace;
             }
-            else if (phase == Phase.Burst)
+            else if (phase == Phase.Burst || boosted)
             {
                 Animation = "swim";
                 AnimRate = 0.8 + 0.4 * pace;
@@ -210,25 +439,101 @@ namespace DesktopPet
             }
         }
 
-        void StartLanding(Rectangle area)
+        // The box the pet's top-left corner may move in on one work area.
+        Rectangle Roam(Rectangle work)
+        {
+            return new Rectangle(work.Left, work.Top, Math.Max(0, work.Width - Width), Math.Max(0, work.Height - Height));
+        }
+
+        // Stay on the screen under the pet's centre, but let it cross into a
+        // neighbouring screen.
+        void KeepOnScreens(World world)
+        {
+            Rectangle work = world.WorkAt(CenterX, CenterY);
+            Rectangle area = Roam(work);
+            double minX = world.OnAnyScreen(work.Left - 2, CenterY) ? work.Left - Width : area.Left;
+            double maxX = world.OnAnyScreen(work.Right + 2, CenterY) ? work.Right : area.Right;
+            double minY = world.OnAnyScreen(CenterX, work.Top - 2) ? work.Top - Height : area.Top;
+            double maxY = world.OnAnyScreen(CenterX, work.Bottom + 2) ? work.Bottom : area.Bottom;
+            X = Math.Max(minX, Math.Min(maxX, X));
+            Y = Math.Max(minY, Math.Min(maxY, Y));
+        }
+
+        // Pick a landing spot: the taskbar of this screen, or (more often) the
+        // visible top edge of a nearby window.
+        void ChoosePerch(World world)
+        {
+            Surface ground = world.GroundAt(CenterX, CenterY);
+            List<Surface> windows = new List<Surface>();
+            foreach (Surface s in world.Surfaces)
+            {
+                if (s.Ground || s.Right - s.Left < Width * 1.5)
+                    continue;
+                double mid = (s.Left + s.Right) / 2.0;
+                if (Math.Abs(mid - CenterX) > 1400 || s.Top - Height < world.WorkAt(mid, s.Top).Top)
+                    continue;
+                windows.Add(s);
+            }
+            Surface pick = windows.Count > 0 && (ground == null || random.NextDouble() < 0.6)
+                ? windows[random.Next(windows.Count)] : ground;
+            if (pick == null)
+            {
+                flyLeft = 5;
+                return;
+            }
+            perchId = pick.Id;
+            perchTop = pick.Top;
+            approaching = true;
+            approachLeft = 20;
+            double ahead = (FacingRight ? 1 : -1) * (150 + random.NextDouble() * 350);
+            endX = Math.Max(pick.Left, Math.Min(pick.Right - Width, X + ahead));
+        }
+
+        void StartLanding()
         {
             mode = Mode.Landing;
             modeTime = 0;
+            modeLength = landTime;
             approaching = false;
             startX = X;
             startY = Y;
-            endX = targetX;
             if (Math.Abs(endX - startX) > 2)
                 FacingRight = endX > startX;
         }
 
-        // Glide down onto the ground, slowing to a stop as the landing plays.
-        void Land(Rectangle area)
+        // The perch the pet is on, refreshed; null if it moved, vanished or got
+        // covered. The ground just follows the taskbar.
+        Surface CurrentPerch(World world)
         {
-            double t = Math.Min(1, modeTime / landTime);
+            Surface s = world.Find(perchId, X, X + Width);
+            if (s == null && perchId < 0)
+                s = world.GroundAt(CenterX, CenterY);
+            if (s == null || (perchId >= 0 && Math.Abs(s.Top - perchTop) > 1))
+                return null;
+            perchId = s.Id;
+            perchTop = s.Top;
+            return s;
+        }
+
+        // Glide down onto the perch, slowing to a stop as the landing plays.
+        void Land(World world)
+        {
+            Surface s = world.Find(perchId, endX, endX + Width);
+            if (s == null || Math.Abs(s.Top - perchTop) > 2)
+            {
+                // The window went away under us: pull up and fly on.
+                mode = Mode.Fly;
+                Heading = FacingRight ? -0.5 : Math.PI + 0.5;
+                speed = cruise * 0.6;
+                flyLeft = 4 + random.NextDouble() * 4;
+                PickTarget(world);
+                return;
+            }
+            perchTop = s.Top;
+            double t = Math.Min(1, modeTime / modeLength);
             double ease = 1 - (1 - t) * (1 - t);
             X = startX + (endX - startX) * ease;
-            Y = startY + (area.Bottom - startY) * ease;
+            Y = startY + (perchTop - Height - startY) * ease;
             Animation = "land";
             OneShot = t;
             if (t >= 1)
@@ -241,11 +546,17 @@ namespace DesktopPet
             }
         }
 
-        // Stand on the ground; now and then turn around, hop, or take off.
-        void Perch(double dt, Rectangle area, int size)
+        // Stand on the perch; now and then turn around, hop, or take off.
+        void Perch(double dt, World world)
         {
-            Y = area.Bottom;
-            X = Math.Max(area.Left, Math.Min(area.Right, X));
+            Surface s = CurrentPerch(world);
+            if (s == null)
+            {
+                StartTakeoff(true);   // startled: the window moved or was covered
+                return;
+            }
+            Y = s.Top - Height;
+            X = Math.Max(s.Left, Math.Min(s.Right - Width, X));
             Heading = FacingRight ? 0 : Math.PI;
             Animation = "stand";
             perchLeft -= dt;
@@ -253,12 +564,12 @@ namespace DesktopPet
             if (restLeft > 0)
                 return;
 
-            bool nearLeft = X - area.Left < size, nearRight = area.Right - X < size;
+            bool nearLeft = X - s.Left < Width, nearRight = s.Right - (X + Width) < Width;
             if (perchLeft <= 0)
-                StartTakeoff();
+                StartTakeoff(false);
             else if ((nearLeft && !FacingRight) || (nearRight && FacingRight))
             {
-                FacingRight = !FacingRight;   // turn away from the edge
+                FacingRight = !FacingRight;   // turn away from the end
                 restLeft = 0.8 + random.NextDouble();
             }
             else if (random.NextDouble() < 0.25)
@@ -270,19 +581,26 @@ namespace DesktopPet
             {
                 mode = Mode.Hopping;
                 modeTime = 0;
+                modeLength = hopTime;
                 startX = X;
-                endX = Math.Max(area.Left, Math.Min(area.Right, X + (FacingRight ? 1 : -1) * size * 0.35));
+                endX = Math.Max(s.Left, Math.Min(s.Right - Width, X + (FacingRight ? 1 : -1) * Width * 0.35));
             }
             else
                 restLeft = 2 + random.NextDouble() * 3;
         }
 
-        // A short hop along the ground in a low arc.
-        void Hop(Rectangle area, int size)
+        // A short hop along the perch in a low arc.
+        void Hop(World world)
         {
-            double t = Math.Min(1, modeTime / hopTime);
+            Surface s = CurrentPerch(world);
+            if (s == null)
+            {
+                StartTakeoff(true);
+                return;
+            }
+            double t = Math.Min(1, modeTime / modeLength);
             X = startX + (endX - startX) * t;
-            Y = area.Bottom - size * 0.2 * 4 * t * (1 - t);
+            Y = s.Top - Height - Size * 0.2 * 4 * t * (1 - t);
             Animation = "hop";
             OneShot = t;
             if (t >= 1)
@@ -293,36 +611,51 @@ namespace DesktopPet
             }
         }
 
-        void StartTakeoff()
+        // Startled takeoffs are quicker.
+        void StartTakeoff(bool startled)
         {
             mode = Mode.TakingOff;
             modeTime = 0;
+            modeLength = takeoffTime / (startled ? 1.7 : 1);
             startX = X;
             startY = Y;
         }
 
         // Spring up and forward, speeding up, then fly on from there.
-        void TakeOff(Rectangle area, int size)
+        void TakeOff(World world)
         {
-            double t = Math.Min(1, modeTime / takeoffTime);
-            double dx = (FacingRight ? 1 : -1) * cruise * takeoffTime * 0.4;
-            double lift = size * 0.6;
-            X = Math.Max(area.Left, Math.Min(area.Right, startX + dx * t * t));
-            Y = Math.Max(area.Top, startY - lift * t * t);
+            double t = Math.Min(1, modeTime / modeLength);
+            double dx = (FacingRight ? 1 : -1) * cruise * modeLength * 0.4;
+            double lift = Size * 0.6;
+            X = startX + dx * t * t;
+            Y = startY - lift * t * t;
+            KeepOnScreens(world);
             Animation = "takeoff";
             OneShot = t;
             if (t >= 1)
             {
-                // Carry on at the speed and angle it left the ground with.
-                double vx = 2 * dx / takeoffTime, vy = -2 * lift / takeoffTime;
+                // Carry on at the speed and angle it left the perch with.
+                double vx = 2 * dx / modeLength, vy = -2 * lift / modeLength;
                 Heading = Math.Atan2(vy, vx);
-                speed = Math.Min(cruise, Math.Sqrt(vx * vx + vy * vy));
+                speed = Math.Min(cruise * 1.5, Math.Sqrt(vx * vx + vy * vy));
                 turnRate = 0;
                 mode = Mode.Fly;
                 modeTime = 0;
                 flyLeft = 10 + random.NextDouble() * 15;
-                targetX = area.Left + random.NextDouble() * area.Width;
-                targetY = Math.Max(area.Top, Y - area.Height * (0.3 + random.NextDouble() * 0.3));
+                PickTarget(world);
+                Rectangle work = world.WorkAt(CenterX, CenterY);
+                targetY = Math.Max(work.Top, Y - work.Height * (0.3 + random.NextDouble() * 0.3));
+            }
+        }
+
+        void MakeRipple()
+        {
+            if (burstGlide && rippleCooldown <= 0)
+            {
+                Ripple = true;
+                RippleX = CenterX;
+                RippleY = CenterY;
+                rippleCooldown = 1.2;
             }
         }
 
@@ -361,19 +694,22 @@ namespace DesktopPet
             return angle;
         }
 
-        void PickTarget(Rectangle area)
+        // A new place to head for: usually somewhere on this screen, sometimes
+        // on another one. Side-on pets mostly travel sideways.
+        void PickTarget(World world)
         {
-            // A few tries for a target that is a decent distance away. Side-on
-            // pets mostly travel sideways.
+            Rectangle work = world.WorkAt(CenterX, CenterY);
+            if (world.WorkAreas.Count > 1 && random.NextDouble() < 0.3)
+                work = world.WorkAreas[random.Next(world.WorkAreas.Count)];
             for (int i = 0; i < 4; i++)
             {
-                targetX = area.Left + random.NextDouble() * area.Width;
+                targetX = work.Left + random.NextDouble() * Math.Max(0, work.Width - Width);
                 targetY = sideOn
-                    ? Y + (random.NextDouble() * 2 - 1) * area.Height * 0.3
-                    : area.Top + random.NextDouble() * area.Height;
-                targetY = Math.Max(area.Top, Math.Min(area.Bottom, targetY));
+                    ? Y + (random.NextDouble() * 2 - 1) * work.Height * 0.3
+                    : work.Top + random.NextDouble() * Math.Max(0, work.Height - Height);
+                targetY = Math.Max(work.Top, Math.Min(work.Bottom - Height, targetY));
                 double dx = targetX - X, dy = targetY - Y;
-                if (dx * dx + dy * dy > area.Width * area.Width / 16.0)
+                if (dx * dx + dy * dy > work.Width * work.Width / 16.0)
                     break;
             }
         }
