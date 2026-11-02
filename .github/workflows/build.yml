@@ -1,0 +1,62 @@
+# Builds the Windows exe and the macOS app on every push. Pushing a tag like
+# v1.0 also publishes both as a GitHub Release.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: cmd
+        run: build.cmd
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path (Get-ChildItem bin -Exclude settings.ini).FullName -DestinationPath DesktopPet-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DesktopPet-windows
+          path: DesktopPet-windows.zip
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          # Turn compiler errors and warnings into annotations on the run.
+          echo "::add-matcher::.github/swift-matcher.json"
+          sh mac/build.sh
+      - name: Package
+        run: ditto -c -k --keepParent "mac/build/Desktop Pet.app" DesktopPet-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DesktopPet-macos
+          path: DesktopPet-macos.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            DesktopPet-windows.zip
+            DesktopPet-macos.zip
+          generate_release_notes: true
