@@ -45,6 +45,48 @@ def outline(img, color):
     return out
 
 
+def top_down(size, angle, paint, eyes, line):
+    """Draw a top-down creature with its head pointing along angle.
+
+    Each pixel centre is turned back into the creature's own coordinates (u
+    runs tail to head, v across the body) and paint(u, v) picks its colour, or
+    None for empty. That draws every heading fresh instead of rotating finished
+    pixels. eyes are (u, v, colour) points placed exactly, only where they land
+    on the body.
+    """
+    img = Image.new("RGBA", (size, size), CLEAR)
+    px = img.load()
+    centre = size / 2
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    for y in range(size):
+        for x in range(size):
+            dx, dy = x + 0.5 - centre, y + 0.5 - centre
+            color = paint(dx * cos_a + dy * sin_a, -dx * sin_a + dy * cos_a)
+            if color:
+                px[x, y] = color
+    for u, v, color in eyes:
+        ex = int(math.floor(centre + u * cos_a - v * sin_a))
+        ey = int(math.floor(centre + u * sin_a + v * cos_a))
+        if 0 <= ex < size and 0 <= ey < size and px[ex, ey][3]:
+            px[ex, ey] = color
+    return outline(img, line)
+
+
+def top_down_sheet(spec, frame, speed):
+    """Rows for every animation at every heading, plus the pet.ini lines."""
+    size, n, headings = spec["size"], spec["frames"], spec["headings"]
+    rows = []
+    for params in spec["anims"].values():
+        for h in range(headings):
+            angle = 2 * math.pi * h / headings
+            rows.append([frame(2 * math.pi * i / n, angle, *params) for i in range(n)])
+    ini = [f"frameWidth={size}", f"frameHeight={size}", f"headings={headings}",
+           f"speed={speed}        ; pixels per second at 1x", ""]
+    for i, name in enumerate(spec["anims"]):
+        ini += [f"[{name}]", f"row={i * headings}", f"frames={n}", f"fps={spec['fps'][name]}", ""]
+    return rows, ini
+
+
 # --- Koi: top-down, any heading ------------------------------------------
 
 KOI = {
@@ -53,6 +95,7 @@ KOI = {
     "headings": 16,
     # name: (tail sway in pixels, pectoral fin reach, fin flap)
     "anims": {"swim": (2.4, 2.6, 0.7), "glide": (0.8, 1.8, 0.3)},
+    "fps": {"swim": 10, "glide": 10},
     "white": rgba("#f4f1ea"),
     "shade": rgba("#d9d3c7"),
     "red": rgba("#e0472b"),
@@ -63,19 +106,9 @@ KOI = {
 
 
 def koi_frame(phase, angle, sway, fin_reach, fin_flap):
-    """The koi at one point in its tail cycle, its head pointing along angle.
-
-    Each pixel centre is turned back into the fish's own coordinates (u runs
-    tail to head, v across the body) and tested against the body shape there,
-    so every heading is drawn fresh instead of rotating finished pixels.
-    """
-    size = KOI["size"]
-    img = Image.new("RGBA", (size, size), CLEAR)
-    px = img.load()
-    centre = size / 2
+    """The koi at one point in its tail cycle, its head pointing along angle."""
     tail_u, head_u = -13.0, 13.0
     length = head_u - tail_u
-    cos_a, sin_a = math.cos(angle), math.sin(angle)
 
     def spine(t):
         # Sideways wave that travels toward the tail and grows there.
@@ -89,69 +122,123 @@ def koi_frame(phase, angle, sway, fin_reach, fin_flap):
         body = math.sin(min(1.0, (t - 0.24) / 0.76) * math.pi * 0.92)
         return 1.0 + 3.0 * body
 
-    def to_pixel(u, v):
-        x = centre + u * cos_a - v * sin_a
-        y = centre + u * sin_a + v * cos_a
-        return int(math.floor(x)), int(math.floor(y))
-
     reach = fin_reach + fin_flap * math.sin(phase)
-    for y in range(size):
-        for x in range(size):
-            dx, dy = x + 0.5 - centre, y + 0.5 - centre
-            u = dx * cos_a + dy * sin_a
-            v = -dx * sin_a + dy * cos_a
-            t = (u - tail_u) / length
-            if not 0 <= t <= 1:
-                continue
-            cy, hw = spine(t), half_width(t)
-            off = abs(v - cy)
-            if off > hw:
-                # Pectoral fins: swept-back paddles just behind the head.
-                d = off - hw
-                if d <= reach and 0.66 - 0.035 * d <= t <= 0.76 - 0.035 * d:
-                    px[x, y] = KOI["fin"]
-                continue
-            s = (v - cy) / hw
-            if t < 0.16:
-                if not (abs(s) < 0.35 and t < 0.1):  # notch the fork
-                    px[x, y] = KOI["fin"]
-                continue
-            color = KOI["white"]
-            if abs(s) > 0.75:
-                color = KOI["shade"]
-            # Kohaku patches, placed in (t, s) so they sway with the body.
-            if ((t - 0.42) / 0.11) ** 2 + ((s + 0.25) / 0.85) ** 2 < 1:
-                color = KOI["red"]
-            if ((t - 0.66) / 0.09) ** 2 + ((s - 0.3) / 0.8) ** 2 < 1:
-                color = KOI["red"]
-            if ((t - 0.88) / 0.05) ** 2 + (s / 0.55) ** 2 < 1:
-                color = KOI["red"]  # tancho spot on the head
-            px[x, y] = color
 
-    # Eyes near the front of the head, only where they land on the body.
+    def paint(u, v):
+        t = (u - tail_u) / length
+        if not 0 <= t <= 1:
+            return None
+        cy, hw = spine(t), half_width(t)
+        off = abs(v - cy)
+        if off > hw:
+            # Pectoral fins: swept-back paddles just behind the head.
+            d = off - hw
+            if d <= reach and 0.66 - 0.035 * d <= t <= 0.76 - 0.035 * d:
+                return KOI["fin"]
+            return None
+        s = (v - cy) / hw
+        if t < 0.16:
+            return None if abs(s) < 0.35 and t < 0.1 else KOI["fin"]  # forked tail
+        color = KOI["white"]
+        if abs(s) > 0.75:
+            color = KOI["shade"]
+        # Kohaku patches, placed in (t, s) so they sway with the body.
+        if ((t - 0.42) / 0.11) ** 2 + ((s + 0.25) / 0.85) ** 2 < 1:
+            color = KOI["red"]
+        if ((t - 0.66) / 0.09) ** 2 + ((s - 0.3) / 0.8) ** 2 < 1:
+            color = KOI["red"]
+        if ((t - 0.88) / 0.05) ** 2 + (s / 0.55) ** 2 < 1:
+            color = KOI["red"]  # tancho spot on the head
+        return color
+
     eye_t = 0.94
-    for side in (-1, 1):
-        ex, ey = to_pixel(tail_u + eye_t * length,
-                          spine(eye_t) + side * (half_width(eye_t) - 0.6))
-        if 0 <= ex < size and 0 <= ey < size and px[ex, ey][3]:
-            px[ex, ey] = KOI["eye"]
-
-    return outline(img, KOI["line"])
+    eyes = [(tail_u + eye_t * length, spine(eye_t) + side * (half_width(eye_t) - 0.6), KOI["eye"])
+            for side in (-1, 1)]
+    return top_down(KOI["size"], angle, paint, eyes, KOI["line"])
 
 
-def koi_sheet():
-    size, n, headings = KOI["size"], KOI["frames"], KOI["headings"]
-    rows = []
-    for sway, fin_reach, fin_flap in KOI["anims"].values():
-        for h in range(headings):
-            angle = 2 * math.pi * h / headings
-            rows.append([koi_frame(2 * math.pi * i / n, angle, sway, fin_reach, fin_flap)
-                         for i in range(n)])
-    ini = [f"frameWidth={size}", f"frameHeight={size}", f"headings={headings}",
-           "speed=30        ; pixels per second at 1x", ""]
-    for i, name in enumerate(KOI["anims"]):
-        ini += [f"[{name}]", f"row={i * headings}", f"frames={n}", "fps=10", ""]
-    return rows, ini
+# --- Flatfish: top-down flounder, any heading ----------------------------
+
+FLATFISH = {
+    "size": 32,
+    "frames": 8,
+    "headings": 16,
+    # name: (fin ripple height,)
+    "anims": {"swim": (1.6,), "glide": (0.5,)},
+    "fps": {"swim": 9, "glide": 6},
+    "body": rgba("#b8946a"),
+    "spot": rgba("#8c6b45"),
+    "speck": rgba("#dcc297"),
+    "fin": rgba("#a3825a"),
+    "ray": rgba("#876741"),
+    "ring": rgba("#efe2c0"),
+    "eye": rgba("#1c1712"),
+    "line": rgba("#3b2d1f"),
+}
+
+# Dark blotches and pale specks, as (t, s, t radius, s radius) on the body.
+FLATFISH_SPOTS = [(0.36, 0.42, 0.06, 0.24), (0.5, -0.45, 0.05, 0.22), (0.63, 0.3, 0.05, 0.2),
+                  (0.43, -0.04, 0.04, 0.17), (0.73, -0.32, 0.04, 0.17), (0.28, -0.3, 0.035, 0.2)]
+FLATFISH_SPECKS = [(0.31, 0.05, 0.025, 0.1), (0.56, 0.08, 0.025, 0.1), (0.68, 0.58, 0.025, 0.12),
+                   (0.45, 0.6, 0.025, 0.1), (0.6, -0.68, 0.025, 0.1)]
+
+
+def flatfish_frame(phase, angle, ripple):
+    """A flounder: flat oval body, a fin skirt all round that ripples as it
+    swims, a fan tail, and both eyes on one side of the head."""
+    tail_u, head_u = -12.0, 11.0
+    length = head_u - tail_u
+
+    def sway(t):
+        return 0.4 * math.sin(phase - 3 * t) * (1 - t) ** 2
+
+    def half_width(t):
+        if t < 0.1:  # fan tail
+            return 1.0 + (0.1 - t) * 30
+        if t < 0.16:  # tail stem
+            return 1.2
+        x = (t - 0.16) / 0.84
+        return 0.6 + 6.0 * math.sin(math.pi * x) ** 0.7 * (1 - 0.25 * x)
+
+    def skirt(t, side):
+        # Fin fringe along both edges; waves run back along it.
+        if not 0.2 < t < 0.9:
+            return 0
+        taper = math.sin(math.pi * (t - 0.2) / 0.7) ** 0.5
+        wave = 0.5 + 0.5 * math.sin(phase - 10 * t + side * 0.6)
+        return taper * (1.3 + ripple * wave)
+
+    def in_blobs(t, s, blobs):
+        return any(((t - bt) / rt) ** 2 + ((s - bs) / rs) ** 2 < 1 for bt, bs, rt, rs in blobs)
+
+    eye_spots = [(0.87, -0.42), (0.81, -0.1)]  # (t, s), both on the upper side
+
+    def paint(u, v):
+        t = (u - tail_u) / length
+        if not 0 <= t <= 1:
+            return None
+        vv = v - sway(t)
+        hw = half_width(t)
+        off = abs(vv)
+        if t < 0.16:
+            return FLATFISH["fin"] if off <= hw else None
+        if off > hw:
+            if off - hw <= skirt(t, 1 if vv > 0 else -1):
+                return FLATFISH["ray"] if int(t * 22) % 2 == 0 else FLATFISH["fin"]
+            return None
+        s = vv / hw
+        for et, es in eye_spots:
+            if math.hypot(u - (tail_u + et * length), vv - es * half_width(et)) < 1.1:
+                return FLATFISH["ring"]
+        if in_blobs(t, s, FLATFISH_SPOTS):
+            return FLATFISH["spot"]
+        if in_blobs(t, s, FLATFISH_SPECKS):
+            return FLATFISH["speck"]
+        return FLATFISH["body"]
+
+    eyes = [(tail_u + et * length, sway(et) + es * half_width(et), FLATFISH["eye"])
+            for et, es in eye_spots]
+    return top_down(FLATFISH["size"], angle, paint, eyes, FLATFISH["line"])
 
 
 # --- Heron: side view, flying right --------------------------------------
@@ -247,5 +334,6 @@ def write_pet(name, rows, ini):
 
 
 if __name__ == "__main__":
-    write_pet("koi", *koi_sheet())
+    write_pet("koi", *top_down_sheet(KOI, koi_frame, speed=30))
+    write_pet("flatfish", *top_down_sheet(FLATFISH, flatfish_frame, speed=22))
     write_pet("heron", *heron_sheet())
