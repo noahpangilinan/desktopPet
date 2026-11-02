@@ -4,13 +4,14 @@ A tiny pixel-art pet that wanders around your desktop on **Windows** or **macOS*
 above every window but ignores the mouse completely, so you can click and type straight
 through it.
 
-Comes with three animals, and adding more means dropping in a folder:
+Comes with four animals, and adding more means dropping in a folder:
 
 | Pet | How it moves |
 | --- | --- |
 | **Koi** | Swims like a real one: a few strong tail beats, then a long glide, sometimes settling to rest. Turns to face any direction along curving, meandering paths |
 | **Flatfish** | A flounder that swims the same way, its fin skirt rippling along its edges as it goes |
-| **Heron** | Flaps steadily along gentle arcs. Every so often it comes down to land on the taskbar (or the Dock on a Mac), stands around, hops and turns, then takes off again |
+| **Manta ray** | Deep indigo with purple Filipino-weave motifs on its back (a diamond chain down the spine, zigzag bands across the wings). Flies through the screen with slow, rippling wingbeats and long glides |
+| **Heron** | A Japanese-style heron in just white, black and a red crown, with ink-thin legs and bill. Flaps steadily along gentle arcs. Every so often it comes down to land on the taskbar (or the Dock on a Mac), stands around, hops and turns, then takes off again |
 
 Both versions are tiny and need nothing extra installed beyond the platform's own compiler.
 They use about 0.2% CPU, and the picture only changes when the animation frame does.
@@ -84,7 +85,7 @@ There are two kinds of pet:
 
 - **Side-on** (`headings=1`, the default; e.g. the heron): one row per animation, drawn
   **facing right**. The app mirrors it when it moves left and keeps it mostly level.
-- **Top-down** (`headings=16`; e.g. the koi and flatfish): each animation takes 16 rows,
+- **Top-down** (`headings=16`; e.g. the koi, flatfish and manta): each animation takes 16 rows,
   one per heading. Heading 0 faces right and each next row turns 22.5° clockwise. The
   pet turns to face exactly where it's going, so it can swim in any direction.
 
@@ -103,7 +104,7 @@ The same folder works on both Windows and macOS.
 
 ## Redrawing the built-in sprites
 
-The koi, flatfish and heron are drawn by `tools/draw_sprites.py` (needs Pillow):
+The koi, flatfish, manta and heron are drawn by `tools/draw_sprites.py` (needs Pillow):
 
 ```
 py tools/draw_sprites.py --preview

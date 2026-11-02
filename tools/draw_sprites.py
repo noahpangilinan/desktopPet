@@ -241,21 +241,109 @@ def flatfish_frame(phase, angle, ripple):
     return top_down(FLATFISH["size"], angle, paint, eyes, FLATFISH["line"])
 
 
+# --- Manta ray: top-down, any heading ------------------------------------
+
+MANTA = {
+    "size": 32,
+    "frames": 8,
+    "headings": 16,
+    # name: (how far the wings fold in at the top and bottom of a beat,)
+    "anims": {"swim": (0.32,), "glide": (0.07,)},
+    "fps": {"swim": 6, "glide": 4},
+    "back": rgba("#211b38"),      # deep indigo
+    "edge": rgba("#2f2650"),      # slightly lighter wing margins
+    "purple": rgba("#7b3fb0"),    # ube
+    "lilac": rgba("#c7a0ea"),
+    "belly": rgba("#e9e3f2"),     # pale underside peeking at the horn fins
+    "line": rgba("#0e0b18"),
+}
+
+
+def manta_frame(phase, angle, beat):
+    """A manta seen from above: broad pointed wings, curled horn fins in front,
+    a long whip tail, and purple Filipino-weave motifs on the back: a chain of
+    diamonds down the spine and zigzag bands across each wing."""
+    head_u, tip_u, root_u = 6.5, -3.0, -6.5   # front edge, wingtips, tail root
+    span, head_w, root_w, core = 13.5, 4.0, 1.5, 3.0
+
+    def lag(u):
+        # Beats travel from the front of the wing back toward the tips.
+        return phase - 1.6 * (head_u - u) / (head_u - root_u)
+
+    def half_width(u):
+        if u >= tip_u:  # nearly straight leading edge, swept back to the tips
+            f = (head_u - u) / (head_u - tip_u)
+            w = head_w + (span - head_w) * f ** 1.15
+        else:  # deeply curved trailing edge back to the tail root
+            g = (u - root_u) / (tip_u - root_u)
+            w = root_w + (span - root_w) * g ** 2.6
+        # Wings look narrower from above when raised or lowered.
+        fold = 1 - beat * abs(math.sin(lag(u)))
+        return core + max(0.0, w - core) * fold if w > core else w
+
+    def tri(x):
+        """Triangle wave in [0, 1] with period 1."""
+        x %= 1
+        return 2 * x if x < 0.5 else 2 - 2 * x
+
+    def paint(u, v):
+        # Horn fins: two lobes either side of the mouth, curling inward at the
+        # tips, with a sliver of pale underside showing on the inner edge.
+        if head_u - 0.5 <= u <= head_u + 3.0:
+            reach = (u - head_u + 0.5) / 3.5
+            off = abs(v) - (3.3 - 0.9 * reach * reach)
+            if abs(off) <= 0.8:
+                return MANTA["belly"] if off < -0.35 and reach > 0.6 else MANTA["back"]
+        # Whip tail, swaying a little.
+        if -15 <= u < root_u:
+            sway = 0.8 * math.sin(phase * 2 - (root_u - u) * 0.5) * (root_u - u) / 8.5
+            return MANTA["back"] if abs(v - sway) <= 0.6 else None
+        if not root_u <= u <= head_u:
+            return None
+        hw = half_width(u)
+        a = abs(v)
+        if a > hw:
+            return None
+        if a > hw - 1.2 and hw > core + 1:
+            return MANTA["edge"]
+        # Spine: a chain of diamonds, lilac with purple borders.
+        if -5.5 <= u <= 5.5:
+            dmd = a / 1.7 + abs(((u + 5.5) % 2.75) - 1.375) / 1.375
+            if dmd <= 0.55:
+                return MANTA["lilac"]
+            if dmd <= 1.0:
+                return MANTA["purple"]
+        # Wings: two zigzag bands running out toward each tip.
+        if a > core:
+            r = (a - core) / max(0.1, hw - core)       # 0 at the body, 1 at the edge
+            for centre in (0.38, 0.72):
+                if abs(r - (centre + 0.1 * (tri(u * 0.45) - 0.5))) < 0.075:
+                    return MANTA["purple"]
+            # Lilac dots between the bands, like woven stars.
+            if abs(r - 0.55) < 0.06 and tri(u * 0.45 + 0.25) > 0.8:
+                return MANTA["lilac"]
+        return MANTA["back"]
+
+    return top_down(MANTA["size"], angle, paint, [], MANTA["line"])
+
+
 # --- Heron: side view, flying right --------------------------------------
 
 HERON = {
+    # Japanese ink-painting palette: only white, black and a red crown.
     "size": (32, 32),
     "frames": 6,
-    "body": rgba("#93a3b6"),
-    "belly": rgba("#c9d1db"),
-    "wing": rgba("#7f90a6"),
-    "primary": rgba("#3c4655"),
-    "neck": rgba("#e6e9ee"),
-    "crest": rgba("#22262d"),
-    "bill": rgba("#e9b544"),
-    "leg": rgba("#7a6a48"),
-    "eye": rgba("#f2d24a"),
-    "line": rgba("#262a31"),
+    "body": rgba("#f7f5f0"),
+    "belly": rgba("#f7f5f0"),
+    "wing": rgba("#f7f5f0"),
+    "primary": rgba("#1b1b1d"),
+    "neck": rgba("#f7f5f0"),
+    "crest": rgba("#1b1b1d"),
+    "crown": rgba("#d22630"),
+    "bill": rgba("#1b1b1d"),
+    "leg": rgba("#1b1b1d"),
+    "eye": rgba("#1b1b1d"),
+    "line": rgba("#1b1b1d"),
 }
 
 
@@ -264,10 +352,6 @@ def heron_frame(phase):
     img = Image.new("RGBA", (w, h), CLEAR)
     d = ImageDraw.Draw(img)
     b = round(-1.2 * math.sin(phase))  # body lifts on the downstroke
-
-    # Long legs trailing well past the tail, toes dropped.
-    d.line([(11, 18 + b), (0, 20 + b)], fill=HERON["leg"])
-    d.point((0, 21 + b), fill=HERON["leg"])
 
     # Slim body.
     d.ellipse([9, 14 + b, 19, 18 + b], fill=HERON["body"])
@@ -280,13 +364,9 @@ def heron_frame(phase):
     d.line([(20, 18 + b), (21, 15 + b)], fill=HERON["neck"])
     d.line([(21, 14 + b), (22, 13 + b)], fill=HERON["neck"])
     d.rectangle([22, 12 + b, 24, 14 + b], fill=HERON["neck"])
-    d.line([(21, 12 + b), (24, 12 + b)], fill=HERON["crest"])  # crown stripe
+    d.line([(21, 12 + b), (24, 12 + b)], fill=HERON["crown"])  # red crown
     d.line([(18, 13 + b), (20, 12 + b)], fill=HERON["crest"])  # plume
     d.point((23, 13 + b), fill=HERON["eye"])
-
-    # Long dagger bill.
-    d.line([(25, 13 + b), (31, 14 + b)], fill=HERON["bill"])
-    d.point((25, 14 + b), fill=HERON["bill"])
 
     # Broad near wing: shoulder fixed on the body, wrist and tip sweeping
     # from fully raised to fully lowered.
@@ -296,11 +376,17 @@ def heron_frame(phase):
     wrist = (15, sy - 7 * lift)
     tip = (5 - abs(lift), sy - 13 * lift)
     trail = (8, sy - 5 * lift + 1)
-    d.polygon([front, wrist, tip, trail, back], fill=HERON["wing"])
-    # Dark flight feathers on the outer half.
+    d.polygon([front, wrist, tip, trail, back], fill=HERON["wing"], outline=HERON["line"])
+    # Black flight feathers on the outer half.
     d.polygon([wrist, tip, trail], fill=HERON["primary"])
 
-    return outline(img, HERON["line"])
+    # Legs and bill go on after the outline as thin single-pixel ink strokes.
+    img = outline(img, HERON["line"])
+    d = ImageDraw.Draw(img)
+    d.line([(11, 18 + b), (0, 20 + b)], fill=HERON["leg"])  # legs trailing
+    d.point((0, 21 + b), fill=HERON["leg"])
+    d.line([(25, 13 + b), (31, 14 + b)], fill=HERON["bill"])  # dagger bill
+    return img
 
 
 def heron_pose(body_dy, legs, neck, neck_dy, wing):
@@ -316,29 +402,6 @@ def heron_pose(body_dy, legs, neck, neck_dy, wing):
     d = ImageDraw.Draw(img)
     b = body_dy
     hip = 20 + b
-    leg = HERON["leg"]
-
-    if legs == "stand":
-        d.line([(13, hip), (12, 26), (12, 30)], fill=leg)
-        d.line([(14, hip), (15, 26), (16, 30)], fill=leg)
-        d.line([(11, 31), (14, 31)], fill=leg)
-        d.line([(15, 31), (18, 31)], fill=leg)
-    elif legs == "crouch":
-        d.line([(13, hip), (10, 27), (12, 30)], fill=leg)
-        d.line([(14, hip), (12, 27), (15, 30)], fill=leg)
-        d.line([(11, 31), (14, 31)], fill=leg)
-        d.line([(14, 31), (17, 31)], fill=leg)
-    elif legs == "reach":
-        d.line([(13, hip), (15, hip + 5), (17, hip + 8)], fill=leg)
-        d.line([(14, hip), (17, hip + 5), (19, hip + 8)], fill=leg)
-        d.line([(19, hip + 9), (21, hip + 9)], fill=leg)
-    elif legs == "dangle":
-        d.line([(13, hip), (12, hip + 4), (10, hip + 7)], fill=leg)
-        d.line([(14, hip), (14, hip + 4), (12, hip + 7)], fill=leg)
-        d.point((9, hip + 8), fill=leg)
-    else:  # trail, as in flight
-        d.line([(11, hip - 2), (0, hip)], fill=leg)
-        d.point((0, hip + 1), fill=leg)
 
     d.ellipse([9, 15 + b, 19, 20 + b], fill=HERON["body"])
     d.line([(11, 20 + b), (18, 19 + b)], fill=HERON["belly"])
@@ -347,26 +410,24 @@ def heron_pose(body_dy, legs, neck, neck_dy, wing):
         n = b + neck_dy
         d.line([(17, 16 + b), (19, 13 + n), (18, 11 + n), (19, 9 + n)], fill=HERON["neck"], width=2)
         d.rectangle([19, 7 + n, 22, 9 + n], fill=HERON["neck"])
-        d.line([(19, 7 + n), (22, 7 + n)], fill=HERON["crest"])  # crown stripe
+        d.line([(19, 7 + n), (22, 7 + n)], fill=HERON["crown"])  # red crown
         d.line([(16, 8 + n), (18, 7 + n)], fill=HERON["crest"])  # plume
         d.point((21, 8 + n), fill=HERON["eye"])
-        d.line([(23, 8 + n), (29, 9 + n)], fill=HERON["bill"])
-        d.point((23, 9 + n), fill=HERON["bill"])
+        bill = [(23, 8 + n), (29, 9 + n)]
     else:
         d.line([(18, 15 + b), (19, 18 + b)], fill=HERON["neck"])
         d.line([(19, 19 + b), (21, 19 + b)], fill=HERON["neck"])
         d.line([(20, 18 + b), (21, 15 + b)], fill=HERON["neck"])
         d.line([(21, 14 + b), (22, 13 + b)], fill=HERON["neck"])
         d.rectangle([22, 12 + b, 24, 14 + b], fill=HERON["neck"])
-        d.line([(21, 12 + b), (24, 12 + b)], fill=HERON["crest"])
+        d.line([(21, 12 + b), (24, 12 + b)], fill=HERON["crown"])
         d.line([(18, 13 + b), (20, 12 + b)], fill=HERON["crest"])
         d.point((23, 13 + b), fill=HERON["eye"])
-        d.line([(25, 13 + b), (31, 14 + b)], fill=HERON["bill"])
-        d.point((25, 14 + b), fill=HERON["bill"])
+        bill = [(25, 13 + b), (31, 14 + b)]
 
     if wing is None:
-        # Folded: grey back with the dark flight feathers drooping behind.
-        d.ellipse([10, 15 + b, 18, 19 + b], fill=HERON["wing"])
+        # Folded: white wing edged in black, black flight feathers drooping behind.
+        d.chord([10, 15 + b, 18, 19 + b], 0, 180, fill=HERON["wing"], outline=HERON["line"])
         d.polygon([(11, 18 + b), (6, 21 + b), (10, 20 + b)], fill=HERON["primary"])
     else:
         sy = 15 + b
@@ -374,10 +435,36 @@ def heron_pose(body_dy, legs, neck, neck_dy, wing):
         wrist = (15, sy - 7 * wing)
         tip = (5 - abs(wing), sy - 13 * wing)
         trail = (8, sy - 5 * wing + 1)
-        d.polygon([front, wrist, tip, trail, back], fill=HERON["wing"])
+        d.polygon([front, wrist, tip, trail, back], fill=HERON["wing"], outline=HERON["line"])
         d.polygon([wrist, tip, trail], fill=HERON["primary"])
 
-    return outline(img, HERON["line"])
+    # Legs and bill go on after the outline as thin single-pixel ink strokes.
+    img = outline(img, HERON["line"])
+    d = ImageDraw.Draw(img)
+    leg = HERON["leg"]
+    d.line(bill, fill=HERON["bill"])
+    if legs == "stand":
+        d.line([(13, hip), (12, 26), (12, 30)], fill=leg)
+        d.line([(14, hip), (15, 26), (16, 30)], fill=leg)
+        d.line([(10, 31), (13, 31)], fill=leg)
+        d.line([(15, 31), (18, 31)], fill=leg)
+    elif legs == "crouch":
+        d.line([(13, hip), (10, 27), (12, 30)], fill=leg)
+        d.line([(15, hip), (13, 27), (16, 30)], fill=leg)
+        d.line([(10, 31), (13, 31)], fill=leg)
+        d.line([(15, 31), (18, 31)], fill=leg)
+    elif legs == "reach":
+        d.line([(13, hip), (15, hip + 5), (17, hip + 8)], fill=leg)
+        d.line([(15, hip), (18, hip + 5), (20, hip + 8)], fill=leg)
+        d.line([(20, hip + 9), (22, hip + 9)], fill=leg)
+    elif legs == "dangle":
+        d.line([(13, hip), (12, hip + 4), (10, hip + 7)], fill=leg)
+        d.line([(15, hip), (15, hip + 4), (13, hip + 7)], fill=leg)
+        d.point((9, hip + 8), fill=leg)
+    else:  # trail, as in flight
+        d.line([(11, hip - 2), (0, hip)], fill=leg)
+        d.point((0, hip + 1), fill=leg)
+    return img
 
 
 def heron_sheet():
@@ -435,4 +522,5 @@ def write_pet(name, rows, ini):
 if __name__ == "__main__":
     write_pet("koi", *top_down_sheet(KOI, koi_frame, speed=30))
     write_pet("flatfish", *top_down_sheet(FLATFISH, flatfish_frame, speed=22))
+    write_pet("manta", *top_down_sheet(MANTA, manta_frame, speed=24))
     write_pet("heron", *heron_sheet())
