@@ -4,6 +4,10 @@ Tiny pixel-art pets that wander around your desktop on **Windows** or **macOS**.
 above every window but ignore clicks completely, so you can click and type straight
 through them. Run one or several at once, across all your monitors.
 
+**Download:** grab `DesktopPet-windows.zip` or `DesktopPet-macos.zip` from the
+[latest release](../../releases/latest), unzip it and run it. To build it yourself, see
+[Windows](#windows) or [macOS](#macos) below.
+
 Comes with four animals, and adding more means dropping in a folder:
 
 | Pet | How it moves |
